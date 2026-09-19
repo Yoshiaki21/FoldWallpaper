@@ -99,9 +99,14 @@ Google Pixel 11 Pro Fold（内側/外側の2枚のディスプレイを持つ折
 - 更新後のレンジ: 内側 `1.00f..1.30f` / 外側 `1.90f..2.50f`、しきい値 `1.55f`（据え置き）。
 - なお上記は**設定画面のウィンドウサイズ**であり、壁紙サーフェスの実寸とは数十px単位で一致しない可能性がある。レンジはその差を吸収できる幅を残してある。これ以上狭めないこと。
 
-### 7.4 残課題
+### 7.4 片付け（対応済み）
 
-- テンプレート由来の未使用リソース（`purple_*` 等）と、`core-ktx` / `lifecycle-runtime-ktx` の古いバージョンの整理。
+- テンプレート由来の未使用リソース `res/values/colors.xml`（`purple_*` 等7色）を削除。Compose の配色は `ui/theme/Color.kt` で完結しており、XML の色リソースは参照されていなかった。
+- `Theme.kt` のダイナミックカラー判定から `Build.VERSION.SDK_INT >= S` を削除（minSdk 36 では常に真）。
+- 依存を最新へ更新：AGP 9.4.1 / Kotlin Compose プラグイン 2.4.20 / Compose BOM 2026.09.00 / core-ktx 1.19.0 / lifecycle-runtime-ktx 2.11.0 / activity-compose 1.13.0 / espresso-core 3.7.0 / androidx.test.ext:junit 1.3.0。
+- `.idea/deploymentTargetSelector.xml`（Android Studio がデプロイ先端末を記録するローカル設定）を追跡対象から外し、`.gitignore` に追加。
+
+この時点で `lintDebug` の指摘は0件。
 
 ## 8. フェーズ2 詳細仕様（フォルダ指定）
 
