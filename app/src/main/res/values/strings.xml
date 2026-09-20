@@ -1,3 +1,28 @@
 <resources>
     <string name="app_name">FoldWallpaper</string>
+    <string name="wallpaper_description">開閉に応じて内側／外側で別々の画像を表示します</string>
+
+    <string name="settings_title">FoldWallpaper</string>
+    <string name="settings_subtitle">内側と外側のディスプレイに、それぞれ別の画像を設定します。</string>
+
+    <string name="side_inner">内側ディスプレイ（開いた状態）</string>
+    <string name="side_outer">外側ディスプレイ（閉じた状態）</string>
+
+    <string name="action_pick_image">画像を選択</string>
+    <string name="action_change_image">画像を変更</string>
+    <string name="action_clear_image">クリア</string>
+    <string name="action_set_live_wallpaper">ライブ壁紙に設定</string>
+
+    <string name="state_no_image">未設定</string>
+    <string name="state_saving">保存中…</string>
+    <string name="state_save_failed">画像の保存に失敗しました</string>
+    <string name="state_already_active">このライブ壁紙は現在有効です</string>
+
+    <string name="diagnostics_title">この画面の実測値</string>
+    <string name="diagnostics_hint">端末を開閉してこの画面の値を確認し、DeviceProfile.kt のレンジを実測値に合わせてください。</string>
+    <string name="diagnostics_size">描画領域: %1$d × %2$d px</string>
+    <string name="diagnostics_ratio">アスペクト比（長辺/短辺）: %1$s</string>
+    <string name="diagnostics_side">判定結果: %1$s</string>
+    <string name="diagnostics_out_of_range">想定レンジ外です。DeviceProfile.kt の値を更新してください。</string>
+    <string name="diagnostics_device">想定端末: %1$s</string>
 </resources>
