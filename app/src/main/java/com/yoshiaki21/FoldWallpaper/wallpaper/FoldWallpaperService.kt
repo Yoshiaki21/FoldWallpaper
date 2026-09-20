@@ -50,10 +50,14 @@ class FoldWallpaperService : WallpaperService() {
          */
         private val preferenceListener =
             SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-                if (store.isSettingsKey(key)) {
-                    // rotator には単一スレッドからだけ触れる。executor が順序を保証する。
-                    scope.launch { rotator.onSettingsChanged() }
-                    update()
+                when {
+                    store.isImageSourceKey(key) -> {
+                        // rotator には単一スレッドからだけ触れる。executor が順序を保証する。
+                        scope.launch { rotator.onSettingsChanged() }
+                        update()
+                    }
+                    // 暗さの変更で画像まで替わってしまわないよう、描き直すだけにする。
+                    store.isAppearanceKey(key) -> redraw()
                 }
             }
 
@@ -143,7 +147,9 @@ class FoldWallpaperService : WallpaperService() {
             var canvas: Canvas? = null
             try {
                 canvas = holder.lockCanvas()
-                if (canvas != null) WallpaperRenderer.draw(canvas, bitmap, width, height)
+                if (canvas != null) {
+                    WallpaperRenderer.draw(canvas, bitmap, width, height, store.dimPercent(side))
+                }
             } catch (e: IllegalStateException) {
                 // サーフェスが破棄された直後の lockCanvas。次の onSurfaceChanged で描き直される。
                 Log.d(TAG, "描画をスキップしました", e)

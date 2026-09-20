@@ -9,6 +9,7 @@ import androidx.core.content.edit
 import androidx.core.net.toUri
 import com.yoshiaki21.FoldWallpaper.DisplaySide
 import com.yoshiaki21.FoldWallpaper.SwitchInterval
+import com.yoshiaki21.FoldWallpaper.WallpaperDimming
 import java.io.File
 import java.io.IOException
 
@@ -100,6 +101,17 @@ class WallpaperStore(context: Context) {
             prefs.getInt(KEY_INTERVAL, SwitchInterval.DEFAULT.minutes),
         )
         set(value) = prefs.edit { putInt(KEY_INTERVAL, value.minutes) }
+
+    // --- 暗さ ---------------------------------------------------------------
+
+    /** [side] の壁紙を暗くする度合い（%）。内側と外側でパネルが違うため別々に持つ。 */
+    fun dimPercent(side: DisplaySide): Int = WallpaperDimming.clamp(
+        prefs.getInt(key(KEY_DIM, side), WallpaperDimming.DEFAULT_PERCENT),
+    )
+
+    fun setDimPercent(side: DisplaySide, percent: Int) {
+        prefs.edit { putInt(key(KEY_DIM, side), WallpaperDimming.clamp(percent)) }
+    }
 
     // --- ファイル一覧 -------------------------------------------------------
 
@@ -224,13 +236,19 @@ class WallpaperStore(context: Context) {
     // --- 変更通知 -----------------------------------------------------------
 
     /**
-     * 設定画面が変更しうるキーか。
+     * 画像を選び直す必要がある設定（フォルダ・切替間隔）の変更か。
      *
      * Engine は自分の記帳（表示中の画像・最終切替時刻など）も同じ SharedPreferences に書く。
      * それを変更通知として拾うと描画がループするので、設定由来の変更だけを見分ける。
      */
-    fun isSettingsKey(key: String?): Boolean =
+    fun isImageSourceKey(key: String?): Boolean =
         key != null && (key.startsWith(KEY_FOLDER) || key == KEY_INTERVAL)
+
+    /**
+     * 見た目だけの設定（暗さ）の変更か。
+     * 画像は据え置きで描き直すだけでよいので、[isImageSourceKey] とは扱いを分ける。
+     */
+    fun isAppearanceKey(key: String?): Boolean = key != null && key.startsWith(KEY_DIM)
 
     fun registerListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
         prefs.registerOnSharedPreferenceChangeListener(listener)
@@ -306,6 +324,7 @@ class WallpaperStore(context: Context) {
         const val KEY_STAMP = "stamp"
         const val KEY_LAST_SWITCH = "last_switch"
         const val KEY_INTERVAL = "switch_interval_minutes"
+        const val KEY_DIM = "dim"
         const val KEY_LAST_SIDE = "last_rendered_side"
     }
 }

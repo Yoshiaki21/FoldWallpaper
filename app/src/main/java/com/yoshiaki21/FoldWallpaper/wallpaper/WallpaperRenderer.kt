@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.util.Log
+import com.yoshiaki21.FoldWallpaper.WallpaperDimming
 import java.io.File
 import kotlin.math.max
 
@@ -51,18 +52,31 @@ object WallpaperRenderer {
     }
 
     /**
-     * 中央クロップで全面に描く。[bitmap] が null なら単色で塗りつぶす。
+     * 中央クロップで全面に描き、[dimPercent] のぶんだけ暗くする。
+     * [bitmap] が null なら単色で塗りつぶす。
      *
      * 内側（ほぼ正方形）と外側（縦長）で同じ写真を使っても破綻しないよう、
      * 短い方の辺に合わせて拡大し、はみ出した分を左右上下均等に切り落とす。
+     *
+     * 暗さは描画時に黒を重ねて表現する。ビットマップ自体は元のままキャッシュに残るので、
+     * 暗さを変えても再デコードは発生しない。
      */
-    fun draw(canvas: Canvas, bitmap: Bitmap?, width: Int, height: Int) {
+    fun draw(
+        canvas: Canvas,
+        bitmap: Bitmap?,
+        width: Int,
+        height: Int,
+        dimPercent: Int = WallpaperDimming.MIN_PERCENT,
+    ) {
         if (bitmap == null || bitmap.isRecycled || width <= 0 || height <= 0) {
             canvas.drawColor(EMPTY_BACKGROUND_COLOR)
             return
         }
         canvas.drawColor(EMPTY_BACKGROUND_COLOR)
         canvas.drawBitmap(bitmap, centerCropMatrix(bitmap.width, bitmap.height, width, height), paint)
+
+        val dimAlpha = WallpaperDimming.alpha(dimPercent)
+        if (dimAlpha > 0) canvas.drawColor(Color.argb(dimAlpha, 0, 0, 0))
     }
 
     /** 中央クロップ用の変換行列。ロジックを単体テストできるよう切り出してある。 */

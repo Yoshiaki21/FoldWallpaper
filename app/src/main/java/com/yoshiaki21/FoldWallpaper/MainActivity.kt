@@ -8,6 +8,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
@@ -32,7 +34,10 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,6 +45,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -65,6 +72,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** 内側／外側それぞれのフォルダを選ぶ設定画面。ライブ壁紙の settingsActivity も兼ねる。 */
 class MainActivity : ComponentActivity() {
@@ -77,12 +85,20 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    SettingsScreen()
+                    SettingsRoot()
                 }
             }
         }
     }
 }
+
+/**
+ * プレビュー枠の高さ。暗さを見比べながら調整できる大きさと、
+ * スライダーまでスクロールなしで収まることの兼ね合いで決めた暫定値。
+ *
+ * 幅はこの高さと面のアスペクト比から決まる（外側は縦長なので細くなる）。
+ */
+private const val PREVIEW_HEIGHT_DP = 240
 
 /** サムネイル読み込み時の目標解像度。実描画には使わないので小さめで足りる。 */
 private const val THUMBNAIL_TARGET_PX = 480
@@ -97,150 +113,329 @@ private data class SideUiState(
     val thumbnail: Bitmap? = null,
 )
 
+/** 設定画面と情報画面の切り替え。画面数が2つだけなので Navigation は使わない。 */
 @Composable
-private fun SettingsScreen() {
-    val store = WallpaperStore(LocalContext.current)
+private fun SettingsRoot() {
+    var showInfo by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = showInfo) { showInfo = false }
+
+    if (showInfo) {
+        InfoScreen(onBack = { showInfo = false })
+    } else {
+        SettingsScreen(onOpenInfo = { showInfo = true })
+    }
+}
+
+@Composable
+private fun SettingsScreen(onOpenInfo: () -> Unit) {
+    val context = LocalContext.current
+    val store = WallpaperStore(context)
 
     // フォルダの差し替えや画面復帰のたびに増やし、フォルダの中身を読み直させる。
     var revision by remember { mutableIntStateOf(0) }
 
+    // スライダーを動かしている間もプレビューが追従するよう、画面側でも暗さを持つ。
+    val dimPercents = remember {
+        mutableStateMapOf<DisplaySide, Int>().apply {
+            DisplaySide.entries.forEach { put(it, store.dimPercent(it)) }
+        }
+    }
+
+    // 面ごとの状態は画面側で保持する。タブを切り替えるたびに
+    // SAF のフォルダ走査が走らないようにするため。
+    val sideStates = remember { mutableStateMapOf<DisplaySide, SideUiState>() }
+
+    LaunchedEffect(revision) {
+        DisplaySide.entries.forEach { sideStates[it] = SideUiState(loading = true) }
+        DisplaySide.entries.forEach { side ->
+            sideStates[side] = withContext(Dispatchers.IO) { loadSideState(context, store, side) }
+        }
+    }
+
     OnResume { revision++ }
+
+    // 幅が足りる面（内側）では2面を横に並べ、狭い面（外側）ではタブで切り替える。
+    // 判定は設定画面のウィンドウ実寸に対して行うので、分割画面で狭くなった場合もタブ側に倒れる。
+    val containerSize = LocalWindowInfo.current.containerSize
+    val sideBySide =
+        DeviceProfile.classify(containerSize.width, containerSize.height) == DisplaySide.INNER
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            text = stringResource(R.string.settings_title),
-            style = MaterialTheme.typography.headlineMedium,
-        )
-        Text(
-            text = stringResource(R.string.settings_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-
-        DisplaySide.entries.forEach { side ->
-            FolderSlotCard(
-                side = side,
-                store = store,
-                revision = revision,
-                onFolderChanged = { revision++ },
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.settings_title),
+                style = MaterialTheme.typography.headlineSmall,
             )
+            TextButton(onClick = onOpenInfo) {
+                Text(text = stringResource(R.string.action_open_info))
+            }
         }
 
-        Text(
-            text = stringResource(R.string.folder_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (sideBySide) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                DisplaySide.entries.forEach { side ->
+                    SidePanel(
+                        side = side,
+                        store = store,
+                        state = sideStates[side] ?: SideUiState(),
+                        dimPercent = dimPercents[side] ?: WallpaperDimming.DEFAULT_PERCENT,
+                        showTitle = true,
+                        onDimChange = { dimPercents[side] = it },
+                        onDimCommit = { store.setDimPercent(side, it) },
+                        onFolderChanged = { revision++ },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        } else {
+            var selectedIndex by remember { mutableIntStateOf(0) }
+            val selectedSide = DisplaySide.entries[selectedIndex]
+
+            PrimaryTabRow(selectedTabIndex = selectedIndex) {
+                DisplaySide.entries.forEachIndexed { index, side ->
+                    Tab(
+                        selected = index == selectedIndex,
+                        onClick = { selectedIndex = index },
+                        text = { Text(stringResource(side.shortLabelRes())) },
+                    )
+                }
+            }
+
+            SidePanel(
+                side = selectedSide,
+                store = store,
+                state = sideStates[selectedSide] ?: SideUiState(),
+                dimPercent = dimPercents[selectedSide] ?: WallpaperDimming.DEFAULT_PERCENT,
+                showTitle = false,
+                onDimChange = { dimPercents[selectedSide] = it },
+                onDimCommit = { store.setDimPercent(selectedSide, it) },
+                onFolderChanged = { revision++ },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
         IntervalCard(store = store)
 
         SetLiveWallpaperButton(revision = revision, onReturned = { revision++ })
-
-        DiagnosticsCard()
     }
 }
 
+/** 片面ぶんのプレビュー・暗さ・フォルダ設定。 */
 @Composable
-private fun FolderSlotCard(
+private fun SidePanel(
     side: DisplaySide,
     store: WallpaperStore,
-    revision: Int,
+    state: SideUiState,
+    dimPercent: Int,
+    showTitle: Boolean,
+    onDimChange: (Int) -> Unit,
+    onDimCommit: (Int) -> Unit,
+    onFolderChanged: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (showTitle) {
+            Text(
+                text = stringResource(side.shortLabelRes()),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+
+        PreviewBox(side = side, state = state, dimPercent = dimPercent)
+
+        DimSlider(
+            dimPercent = dimPercent,
+            onDimChange = onDimChange,
+            onDimCommit = onDimCommit,
+        )
+
+        FolderSection(
+            side = side,
+            store = store,
+            state = state,
+            onFolderChanged = onFolderChanged,
+        )
+    }
+}
+
+/**
+ * 実機の見え方に近づけたプレビュー。
+ *
+ * 高さを固定し、幅をアスペクト比から決める。幅を基準にすると外側（縦長）の枠が
+ * 画面いっぱいの高さになってしまい、スライダーと並べて見られない。
+ */
+@Composable
+private fun PreviewBox(side: DisplaySide, state: SideUiState, dimPercent: Int) {
+    Box(
+        modifier = Modifier
+            .height(PREVIEW_HEIGHT_DP.dp)
+            .aspectRatio(side.previewAspectRatio())
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        val thumbnail = state.thumbnail
+        if (thumbnail != null) {
+            Image(
+                bitmap = thumbnail.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                // Engine 側と同じ中央クロップで見せる。
+                contentScale = ContentScale.Crop,
+            )
+            // Engine 側と同じ暗さを重ね、実際の見え方に合わせる。
+            val dimFraction = WallpaperDimming.alphaFraction(dimPercent)
+            if (dimFraction > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = dimFraction)),
+                )
+            }
+        } else {
+            Text(
+                text = stringResource(
+                    if (state.loading) R.string.state_scanning else R.string.state_no_folder,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 暗さのスライダー。
+ *
+ * 動かしている間はプレビューだけを更新し、指を離した時点で保存する。
+ * 保存のたびに壁紙が描き直されるため、書き込みは確定時の一度だけにする。
+ */
+@Composable
+private fun DimSlider(
+    dimPercent: Int,
+    onDimChange: (Int) -> Unit,
+    onDimCommit: (Int) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(R.string.dim_value, dimPercent),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Slider(
+            value = dimPercent.toFloat(),
+            onValueChange = { onDimChange(it.roundToInt()) },
+            onValueChangeFinished = { onDimCommit(dimPercent) },
+            valueRange = WallpaperDimming.MIN_PERCENT.toFloat()..
+                WallpaperDimming.MAX_PERCENT.toFloat(),
+        )
+    }
+}
+
+/** 普段は畳んでおくフォルダ設定。プレビューとスライダーの表示面積を優先する。 */
+@Composable
+private fun FolderSection(
+    side: DisplaySide,
+    store: WallpaperStore,
+    state: SideUiState,
     onFolderChanged: () -> Unit,
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var state by remember { mutableStateOf(SideUiState()) }
-
-    LaunchedEffect(side, revision) {
-        state = state.copy(loading = true)
-        state = withContext(Dispatchers.IO) { loadSideState(context, store, side) }
-    }
+    var expanded by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri ->
         if (treeUri != null) {
-            state = state.copy(loading = true)
+            busy = true
             scope.launch {
                 withContext(Dispatchers.IO) {
                     if (store.setFolder(side, treeUri)) store.rescanFolder(side)
                 }
+                busy = false
                 onFolderChanged()
             }
         }
     }
 
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                text = stringResource(side.labelRes()),
-                style = MaterialTheme.typography.titleMedium,
-            )
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(side.previewAspectRatio())
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center,
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                val thumbnail = state.thumbnail
-                if (thumbnail != null) {
-                    Image(
-                        bitmap = thumbnail.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        // Engine 側と同じ中央クロップで見せる。
-                        contentScale = ContentScale.Crop,
-                    )
-                } else {
+                Text(
+                    text = stringResource(R.string.folder_section_title),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                TextButton(onClick = { expanded = !expanded }) {
                     Text(
-                        text = stringResource(
-                            if (state.loading) R.string.state_scanning else R.string.state_no_folder,
+                        stringResource(
+                            if (expanded) R.string.folder_section_collapse
+                            else R.string.folder_section_expand,
                         ),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
 
+            // 畳んでいるときも、設定できているかどうかだけは常に見えるようにする。
             FolderStatus(state)
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { folderPicker.launch(store.folderUri(side)) },
-                    enabled = !state.loading,
+            if (expanded) {
+                Row(
+                    modifier = Modifier.padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(
-                        text = stringResource(
-                            if (state.hasFolder) R.string.action_change_folder
-                            else R.string.action_pick_folder,
-                        ),
-                    )
-                }
-                if (state.hasFolder) {
-                    TextButton(
-                        onClick = {
-                            scope.launch {
-                                withContext(Dispatchers.IO) { store.clearFolder(side) }
-                                onFolderChanged()
-                            }
-                        },
-                        enabled = !state.loading,
+                    OutlinedButton(
+                        onClick = { folderPicker.launch(store.folderUri(side)) },
+                        enabled = !busy,
                     ) {
-                        Text(text = stringResource(R.string.action_clear_folder))
+                        Text(
+                            text = stringResource(
+                                if (state.hasFolder) R.string.action_change_folder
+                                else R.string.action_pick_folder,
+                            ),
+                        )
+                    }
+                    if (state.hasFolder) {
+                        TextButton(
+                            onClick = {
+                                busy = true
+                                scope.launch {
+                                    withContext(Dispatchers.IO) { store.clearFolder(side) }
+                                    busy = false
+                                    onFolderChanged()
+                                }
+                            },
+                            enabled = !busy,
+                        ) {
+                            Text(text = stringResource(R.string.action_clear_folder))
+                        }
                     }
                 }
+                Text(
+                    text = stringResource(R.string.folder_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
             }
         }
     }
@@ -271,7 +466,7 @@ private fun FolderStatus(state: SideUiState) {
 
         else -> Column {
             state.folderName?.let {
-                Text(text = it, style = MaterialTheme.typography.bodyMedium)
+                Text(text = it, style = MaterialTheme.typography.bodySmall)
             }
             Text(
                 text = stringResource(R.string.state_image_count, state.imageCount),
@@ -289,12 +484,12 @@ private fun IntervalCard(store: WallpaperStore) {
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
                 text = stringResource(R.string.interval_title),
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
             )
 
             Box {
@@ -336,7 +531,7 @@ private fun SetLiveWallpaperButton(revision: Int, onReturned: () -> Unit) {
         ActivityResultContracts.StartActivityForResult(),
     ) { onReturned() }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Button(
             onClick = {
                 chooser.launch(
@@ -357,6 +552,35 @@ private fun SetLiveWallpaperButton(revision: Int, onReturned: () -> Unit) {
                 color = MaterialTheme.colorScheme.primary,
             )
         }
+    }
+}
+
+/** 設定とは別に開く情報画面。実機の値を確認するために使う。 */
+@Composable
+private fun InfoScreen(onBack: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .safeDrawingPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.info_title),
+                style = MaterialTheme.typography.headlineSmall,
+            )
+            TextButton(onClick = onBack) {
+                Text(text = stringResource(R.string.action_back))
+            }
+        }
+
+        DiagnosticsCard()
     }
 }
 
@@ -474,6 +698,12 @@ private fun DisplaySide.labelRes(): Int = when (this) {
     DisplaySide.OUTER -> R.string.side_outer
 }
 
+/** タブやスライダーの見出しに使う短い名前。 */
+private fun DisplaySide.shortLabelRes(): Int = when (this) {
+    DisplaySide.INNER -> R.string.side_inner_short
+    DisplaySide.OUTER -> R.string.side_outer_short
+}
+
 private fun SwitchInterval.labelRes(): Int = when (this) {
     SwitchInterval.NONE -> R.string.interval_none
     SwitchInterval.MINUTES_15 -> R.string.interval_15m
@@ -481,7 +711,7 @@ private fun SwitchInterval.labelRes(): Int = when (this) {
     SwitchInterval.HOURS_6 -> R.string.interval_6h
 }
 
-/** プレビュー枠の形。実機の見え方に近づけるための表示上の値。 */
+/** プレビュー枠の形。実機の実測アスペクト比に合わせてある。 */
 private fun DisplaySide.previewAspectRatio(): Float = when (this) {
     DisplaySide.INNER -> 1f / 1.04f
     DisplaySide.OUTER -> 1f / 2.17f

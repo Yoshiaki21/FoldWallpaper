@@ -3,10 +3,19 @@
     <string name="wallpaper_description">開閉に応じて内側／外側で別々の画像を表示します</string>
 
     <string name="settings_title">FoldWallpaper</string>
-    <string name="settings_subtitle">内側と外側のディスプレイに、それぞれ別の画像フォルダを設定します。フォルダ内の画像から1枚がランダムに表示されます。</string>
+
+    <string name="info_title">情報</string>
+    <string name="action_open_info">情報</string>
+    <string name="action_back">戻る</string>
+
+    <string name="folder_section_title">フォルダ設定</string>
+    <string name="folder_section_expand">開く</string>
+    <string name="folder_section_collapse">閉じる</string>
 
     <string name="side_inner">内側ディスプレイ（開いた状態）</string>
     <string name="side_outer">外側ディスプレイ（閉じた状態）</string>
+    <string name="side_inner_short">内側</string>
+    <string name="side_outer_short">外側</string>
 
     <string name="action_pick_folder">フォルダを選択</string>
     <string name="action_change_folder">フォルダを変更</string>
@@ -19,6 +28,8 @@
     <string name="state_folder_empty">このフォルダに画像がありません</string>
     <string name="state_folder_denied">フォルダへのアクセス権がありません。選び直してください。</string>
     <string name="state_already_active">このライブ壁紙は現在有効です</string>
+
+    <string name="dim_value">暗さ: %1$d%%</string>
 
     <string name="interval_title">時間経過での切替</string>
     <string name="interval_hint">開閉したときは必ず切り替わります。この設定は、開閉しないまま壁紙が見えたときにどれだけ経っていれば切り替えるかを決めます。</string>
