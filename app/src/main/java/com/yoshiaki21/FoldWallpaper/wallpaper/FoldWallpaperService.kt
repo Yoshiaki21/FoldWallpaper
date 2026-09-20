@@ -1,13 +1,20 @@
 package com.yoshiaki21.FoldWallpaper.wallpaper
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.media.AudioManager
 import android.service.wallpaper.WallpaperService
 import android.util.Log
 import android.view.SurfaceHolder
 import com.yoshiaki21.FoldWallpaper.DeviceProfile
 import com.yoshiaki21.FoldWallpaper.DisplaySide
+import com.yoshiaki21.FoldWallpaper.ProfileSelection
+import com.yoshiaki21.FoldWallpaper.WallpaperProfile
 import com.yoshiaki21.FoldWallpaper.data.WallpaperStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -61,14 +68,35 @@ class FoldWallpaperService : WallpaperService() {
                 }
             }
 
+        /**
+         * マナーモードが変わったらプロファイルを判定し直す。
+         *
+         * 壁紙が見えている最中に切り替えても反映させるために購読する。
+         * この intent はシステムからのみ送られる protected intent なので受信に権限は要らず、
+         * 他アプリからの送信を受ける必要もないため NOT_EXPORTED で登録する。
+         */
+        private val ringerModeReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) = update()
+        }
+
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
             setOffsetNotificationsEnabled(false)
             store.registerListener(preferenceListener)
+            registerReceiver(
+                ringerModeReceiver,
+                IntentFilter(AudioManager.RINGER_MODE_CHANGED_ACTION),
+                Context.RECEIVER_NOT_EXPORTED,
+            )
         }
 
         override fun onDestroy() {
             store.unregisterListener(preferenceListener)
+            try {
+                unregisterReceiver(ringerModeReceiver)
+            } catch (e: IllegalArgumentException) {
+                Log.d(TAG, "レシーバーは登録されていませんでした", e)
+            }
             scope.cancel()
             executor.shutdown()
             super.onDestroy()
@@ -107,15 +135,21 @@ class FoldWallpaperService : WallpaperService() {
         /** 必要なら次の画像へ進めてから描く。 */
         private fun update() {
             val side = currentSide() ?: return
+            val profile = ProfileSelection.current(this@FoldWallpaperService)
             scope.launch {
                 // 壁紙素材を作るための実測値。この値を知っているのは Engine だけなので、
                 // 描画のついでに記録して情報画面から参照できるようにする。
                 store.recordMeasuredSize(side, surfaceWidth, surfaceHeight)
 
-                if (shouldAdvance(side)) rotator.advance(side)
+                // 先読みは切り替え前のフォルダから選ばれている。プロファイルが変わったら
+                // 捨てないと、前のプロファイルの画像を昇格させてしまう。
+                if (store.lastRenderedProfile != profile) rotator.discardPrefetched(side)
+
+                if (shouldAdvance(side, profile)) rotator.advance(side, profile)
                 store.lastRenderedSide = side
+                store.lastRenderedProfile = profile
                 drawFrame(side)
-                rotator.prefetchNext(side)
+                rotator.prefetchNext(side, profile)
             }
         }
 
@@ -128,11 +162,13 @@ class FoldWallpaperService : WallpaperService() {
         /**
          * 切り替えるべきかの判定。次のいずれかで切り替える。
          * 1. 前回描画した面と違う（＝開閉した）
-         * 2. 最終切替から設定間隔が経過している
-         * 3. 表示中の画像が無い（初回・フォルダ変更直後）
+         * 2. 前回描画したプロファイルと違う（＝マナーモードが切り替わった）
+         * 3. 最終切替から設定間隔が経過している
+         * 4. 表示中の画像が無い（初回・フォルダ変更直後）
          */
-        private fun shouldAdvance(side: DisplaySide): Boolean {
+        private fun shouldAdvance(side: DisplaySide, profile: WallpaperProfile): Boolean {
             if (store.lastRenderedSide != side) return true
+            if (store.lastRenderedProfile != profile) return true
             if (store.currentImageFile(side) == null) return true
 
             val interval = store.switchInterval

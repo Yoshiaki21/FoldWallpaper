@@ -146,16 +146,26 @@ private fun SettingsScreen(onOpenInfo: () -> Unit) {
         }
     }
 
-    // 面ごとの状態は画面側で保持する。タブを切り替えるたびに
+    // 面とプロファイルの組ごとの状態は画面側で保持する。タブを切り替えるたびに
     // SAF のフォルダ走査が走らないようにするため。
-    val sideStates = remember { mutableStateMapOf<DisplaySide, SideUiState>() }
+    val slotStates = remember {
+        mutableStateMapOf<Pair<DisplaySide, WallpaperProfile>, SideUiState>()
+    }
 
     LaunchedEffect(revision) {
-        DisplaySide.entries.forEach { sideStates[it] = SideUiState(loading = true) }
-        DisplaySide.entries.forEach { side ->
-            sideStates[side] = withContext(Dispatchers.IO) { loadSideState(context, store, side) }
+        val slots = DisplaySide.entries.flatMap { side ->
+            WallpaperProfile.entries.map { profile -> side to profile }
+        }
+        slots.forEach { slotStates[it] = SideUiState(loading = true) }
+        slots.forEach { slot ->
+            slotStates[slot] = withContext(Dispatchers.IO) {
+                loadSlotState(context, store, slot.first, slot.second)
+            }
         }
     }
+
+    // プレビューがどちらのプロファイルの画像かを示すため、設定画面でも判定を追う。
+    val activeProfile = ProfileSelection.fromRingerMode(rememberRingerMode())
 
     OnResume { revision++ }
 
@@ -193,7 +203,8 @@ private fun SettingsScreen(onOpenInfo: () -> Unit) {
                     SidePanel(
                         side = side,
                         store = store,
-                        state = sideStates[side] ?: SideUiState(),
+                        states = statesFor(slotStates, side),
+                        activeProfile = activeProfile,
                         dimPercent = dimPercents[side] ?: WallpaperDimming.DEFAULT_PERCENT,
                         showTitle = true,
                         onDimChange = { dimPercents[side] = it },
@@ -220,7 +231,8 @@ private fun SettingsScreen(onOpenInfo: () -> Unit) {
             SidePanel(
                 side = selectedSide,
                 store = store,
-                state = sideStates[selectedSide] ?: SideUiState(),
+                states = statesFor(slotStates, selectedSide),
+                activeProfile = activeProfile,
                 dimPercent = dimPercents[selectedSide] ?: WallpaperDimming.DEFAULT_PERCENT,
                 showTitle = false,
                 onDimChange = { dimPercents[selectedSide] = it },
@@ -241,7 +253,8 @@ private fun SettingsScreen(onOpenInfo: () -> Unit) {
 private fun SidePanel(
     side: DisplaySide,
     store: WallpaperStore,
-    state: SideUiState,
+    states: Map<WallpaperProfile, SideUiState>,
+    activeProfile: WallpaperProfile,
     dimPercent: Int,
     showTitle: Boolean,
     onDimChange: (Int) -> Unit,
@@ -261,7 +274,12 @@ private fun SidePanel(
             )
         }
 
-        PreviewBox(side = side, state = state, dimPercent = dimPercent)
+        // プレビューは実際に表示中の1枚。どのプロファイルのものかはフォルダ設定側で示す。
+        PreviewBox(
+            side = side,
+            state = states[activeProfile] ?: SideUiState(),
+            dimPercent = dimPercent,
+        )
 
         DimSlider(
             dimPercent = dimPercent,
@@ -272,7 +290,8 @@ private fun SidePanel(
         FolderSection(
             side = side,
             store = store,
-            state = state,
+            states = states,
+            activeProfile = activeProfile,
             onFolderChanged = onFolderChanged,
         )
     }
@@ -356,27 +375,11 @@ private fun DimSlider(
 private fun FolderSection(
     side: DisplaySide,
     store: WallpaperStore,
-    state: SideUiState,
+    states: Map<WallpaperProfile, SideUiState>,
+    activeProfile: WallpaperProfile,
     onFolderChanged: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-
-    val folderPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree(),
-    ) { treeUri ->
-        if (treeUri != null) {
-            busy = true
-            scope.launch {
-                withContext(Dispatchers.IO) {
-                    if (store.setFolder(side, treeUri)) store.rescanFolder(side)
-                }
-                busy = false
-                onFolderChanged()
-            }
-        }
-    }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -399,47 +402,109 @@ private fun FolderSection(
                 }
             }
 
-            // 畳んでいるときも、設定できているかどうかだけは常に見えるようにする。
-            FolderStatus(state)
+            WallpaperProfile.entries.forEach { profile ->
+                ProfileFolderRow(
+                    side = side,
+                    profile = profile,
+                    store = store,
+                    state = states[profile] ?: SideUiState(),
+                    isActive = profile == activeProfile,
+                    expanded = expanded,
+                    onFolderChanged = onFolderChanged,
+                )
+            }
 
             if (expanded) {
-                Row(
-                    modifier = Modifier.padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = { folderPicker.launch(store.folderUri(side)) },
-                        enabled = !busy,
-                    ) {
-                        Text(
-                            text = stringResource(
-                                if (state.hasFolder) R.string.action_change_folder
-                                else R.string.action_pick_folder,
-                            ),
-                        )
-                    }
-                    if (state.hasFolder) {
-                        TextButton(
-                            onClick = {
-                                busy = true
-                                scope.launch {
-                                    withContext(Dispatchers.IO) { store.clearFolder(side) }
-                                    busy = false
-                                    onFolderChanged()
-                                }
-                            },
-                            enabled = !busy,
-                        ) {
-                            Text(text = stringResource(R.string.action_clear_folder))
-                        }
-                    }
-                }
                 Text(
                     text = stringResource(R.string.folder_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * プロファイル1つぶんのフォルダ設定。
+ *
+ * 畳んでいるときも状態だけは見えるようにし、設定済みかどうかを一目で分かるようにする。
+ * いま使われているプロファイルには印を付け、プレビューがどちらの画像かを分かるようにする。
+ */
+@Composable
+private fun ProfileFolderRow(
+    side: DisplaySide,
+    profile: WallpaperProfile,
+    store: WallpaperStore,
+    state: SideUiState,
+    isActive: Boolean,
+    expanded: Boolean,
+    onFolderChanged: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { treeUri ->
+        if (treeUri != null) {
+            busy = true
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    if (store.setFolder(side, profile, treeUri)) store.rescanFolder(side, profile)
+                }
+                busy = false
+                onFolderChanged()
+            }
+        }
+    }
+
+    Column(modifier = Modifier.padding(top = 8.dp)) {
+        Text(
+            text = stringResource(
+                if (isActive) R.string.profile_folder_label_active
+                else R.string.profile_folder_label,
+                stringResource(profile.labelRes()),
+            ),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (isActive) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
+
+        FolderStatus(state)
+
+        if (expanded) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { folderPicker.launch(store.folderUri(side, profile)) },
+                    enabled = !busy,
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (state.hasFolder) R.string.action_change_folder
+                            else R.string.action_pick_folder,
+                        ),
+                    )
+                }
+                if (state.hasFolder) {
+                    TextButton(
+                        onClick = {
+                            busy = true
+                            scope.launch {
+                                withContext(Dispatchers.IO) { store.clearFolder(side, profile) }
+                                busy = false
+                                onFolderChanged()
+                            }
+                        },
+                        enabled = !busy,
+                    ) {
+                        Text(text = stringResource(R.string.action_clear_folder))
+                    }
+                }
             }
         }
     }
@@ -805,20 +870,30 @@ private fun OnResume(onResume: () -> Unit) {
     }
 }
 
+/** 面とプロファイルの組の状態を、その面のプロファイル別マップとして取り出す。 */
+private fun statesFor(
+    slotStates: Map<Pair<DisplaySide, WallpaperProfile>, SideUiState>,
+    side: DisplaySide,
+): Map<WallpaperProfile, SideUiState> =
+    WallpaperProfile.entries.associateWith { profile ->
+        slotStates[side to profile] ?: SideUiState()
+    }
+
 /** 設定画面を開いたときだけフォルダを読み直す。描画経路では再スキャンしない。 */
-private fun loadSideState(
+private fun loadSlotState(
     context: Context,
     store: WallpaperStore,
     side: DisplaySide,
+    profile: WallpaperProfile,
 ): SideUiState {
-    val folderUri = store.folderUri(side)
+    val folderUri = store.folderUri(side, profile)
         ?: return SideUiState(loading = false, hasFolder = false)
 
-    if (!store.hasFolderAccess(side)) {
+    if (!store.hasFolderAccess(side, profile)) {
         return SideUiState(loading = false, hasFolder = true, hasAccess = false)
     }
 
-    val imageCount = store.rescanFolder(side)
+    val imageCount = store.rescanFolder(side, profile)
     val thumbnail = store.currentImageFile(side)?.let {
         WallpaperRenderer.decodeScaled(it, THUMBNAIL_TARGET_PX, THUMBNAIL_TARGET_PX)
     }

@@ -37,6 +37,8 @@
     <string name="profile_hint">マナーモードを切り替えると、この表示がその場で変わります。実際の壁紙の出し分けは未実装です。</string>
     <string name="profile_private">プライベート</string>
     <string name="profile_standard">標準</string>
+    <string name="profile_folder_label">%1$s用</string>
+    <string name="profile_folder_label_active">%1$s用（使用中）</string>
 
     <string name="ringer_normal">着信音あり</string>
     <string name="ringer_vibrate">バイブ</string>

@@ -10,6 +10,7 @@ import androidx.core.net.toUri
 import com.yoshiaki21.FoldWallpaper.DisplaySide
 import com.yoshiaki21.FoldWallpaper.SwitchInterval
 import com.yoshiaki21.FoldWallpaper.WallpaperDimming
+import com.yoshiaki21.FoldWallpaper.WallpaperProfile
 import java.io.File
 import java.io.IOException
 
@@ -37,26 +38,30 @@ class WallpaperStore(context: Context) {
     private val cacheDir: File
         get() = File(appContext.filesDir, CACHE_DIR_NAME).apply { mkdirs() }
 
+    init {
+        migrateLegacyFolderKeys()
+    }
+
     // --- フォルダ設定 -------------------------------------------------------
 
-    /** [side] 用に選ばれたフォルダ。未設定なら null。 */
-    fun folderUri(side: DisplaySide): Uri? =
-        prefs.getString(key(KEY_FOLDER, side), null)?.parseUriOrNull()
+    /** [side] と [profile] の組に選ばれたフォルダ。未設定なら null。 */
+    fun folderUri(side: DisplaySide, profile: WallpaperProfile): Uri? =
+        prefs.getString(key(KEY_FOLDER, side, profile), null)?.parseUriOrNull()
 
     /**
-     * [side] のフォルダを [treeUri] に差し替える。永続パーミッションを取得し、
+     * フォルダを [treeUri] に差し替える。永続パーミッションを取得し、
      * 以前のフォルダの権限は解放する。一覧とキャッシュ画像は作り直しになるので消す。
      */
-    fun setFolder(side: DisplaySide, treeUri: Uri): Boolean {
-        val previous = folderUri(side)
+    fun setFolder(side: DisplaySide, profile: WallpaperProfile, treeUri: Uri): Boolean {
+        val previous = folderUri(side, profile)
         return try {
             appContext.contentResolver.takePersistableUriPermission(
                 treeUri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
-            prefs.edit { putString(key(KEY_FOLDER, side), treeUri.toString()) }
-            if (previous != null && previous != treeUri) releasePermission(previous, side)
-            resetSideState(side)
+            prefs.edit { putString(key(KEY_FOLDER, side, profile), treeUri.toString()) }
+            if (previous != null && previous != treeUri) releasePermission(previous, side, profile)
+            resetSourceState(side, profile)
             true
         } catch (e: SecurityException) {
             Log.w(TAG, "フォルダの権限を取得できませんでした: $treeUri", e)
@@ -64,28 +69,32 @@ class WallpaperStore(context: Context) {
         }
     }
 
-    /** [side] のフォルダ設定を消し、権限も解放する。 */
-    fun clearFolder(side: DisplaySide) {
-        folderUri(side)?.let { releasePermission(it, side) }
-        prefs.edit { remove(key(KEY_FOLDER, side)) }
-        resetSideState(side)
+    /** フォルダ設定を消し、権限も解放する。 */
+    fun clearFolder(side: DisplaySide, profile: WallpaperProfile) {
+        folderUri(side, profile)?.let { releasePermission(it, side, profile) }
+        prefs.edit { remove(key(KEY_FOLDER, side, profile)) }
+        resetSourceState(side, profile)
     }
 
     /** フォルダを読む権限がまだ有効か。アンインストール後の再インストール等で失効する。 */
-    fun hasFolderAccess(side: DisplaySide): Boolean {
-        val uri = folderUri(side) ?: return false
+    fun hasFolderAccess(side: DisplaySide, profile: WallpaperProfile): Boolean {
+        val uri = folderUri(side, profile) ?: return false
         return appContext.contentResolver.persistedUriPermissions
             .any { it.uri == uri && it.isReadPermission }
     }
 
     /**
-     * 他の面がまだ使っているフォルダの権限は解放しない。
-     * 内側と外側で同じフォルダを指定できるため。
+     * 他の組み合わせがまだ使っているフォルダの権限は解放しない。
+     * 面（内側/外側）とプロファイル（プライベート/標準）で同じフォルダを指定できるため。
      */
-    private fun releasePermission(uri: Uri, releasingSide: DisplaySide) {
-        val stillInUse = DisplaySide.entries
-            .filter { it != releasingSide }
-            .any { folderUri(it) == uri }
+    private fun releasePermission(
+        uri: Uri,
+        releasingSide: DisplaySide,
+        releasingProfile: WallpaperProfile,
+    ) {
+        val stillInUse = sourceSlots().any { (side, profile) ->
+            (side != releasingSide || profile != releasingProfile) && folderUri(side, profile) == uri
+        }
         if (stillInUse) return
         try {
             appContext.contentResolver.releasePersistableUriPermission(
@@ -96,6 +105,12 @@ class WallpaperStore(context: Context) {
             Log.d(TAG, "解放する権限がありませんでした: $uri", e)
         }
     }
+
+    /** 面とプロファイルの全組み合わせ。 */
+    private fun sourceSlots(): List<Pair<DisplaySide, WallpaperProfile>> =
+        DisplaySide.entries.flatMap { side ->
+            WallpaperProfile.entries.map { profile -> side to profile }
+        }
 
     // --- 切替間隔 -----------------------------------------------------------
 
@@ -152,13 +167,13 @@ class WallpaperStore(context: Context) {
     // --- ファイル一覧 -------------------------------------------------------
 
     /** 保存済みの画像一覧（documentId）。未スキャンなら空。 */
-    fun imageDocumentIds(side: DisplaySide): List<String> {
-        val file = listFile(side)
+    fun imageDocumentIds(side: DisplaySide, profile: WallpaperProfile): List<String> {
+        val file = listFile(side, profile)
         if (!file.isFile) return emptyList()
         return try {
             file.readLines().filter { it.isNotBlank() }
         } catch (e: IOException) {
-            Log.w(TAG, "一覧を読めませんでした (side=$side)", e)
+            Log.w(TAG, "一覧を読めませんでした (side=$side, profile=$profile)", e)
             emptyList()
         }
     }
@@ -169,10 +184,10 @@ class WallpaperStore(context: Context) {
      * 設定画面とEngineの両方から呼ばれうるので、書き込みは一時ファイル経由で行い、
      * 書きかけの一覧が読まれないようにする。
      */
-    fun rescanFolder(side: DisplaySide): Int {
-        val treeUri = folderUri(side) ?: return 0
+    fun rescanFolder(side: DisplaySide, profile: WallpaperProfile): Int {
+        val treeUri = folderUri(side, profile) ?: return 0
         val ids = ImageFolderScanner.listImageDocumentIds(appContext, treeUri)
-        val target = listFile(side)
+        val target = listFile(side, profile)
         val temp = File(cacheDir, "${target.name}.tmp")
         try {
             temp.writeText(ids.joinToString(separator = "\n"))
@@ -181,7 +196,7 @@ class WallpaperStore(context: Context) {
                 temp.delete()
             }
         } catch (e: IOException) {
-            Log.w(TAG, "一覧を保存できませんでした (side=$side)", e)
+            Log.w(TAG, "一覧を保存できませんでした (side=$side, profile=$profile)", e)
             temp.delete()
         }
         return ids.size
@@ -203,9 +218,21 @@ class WallpaperStore(context: Context) {
     fun hasPrefetched(side: DisplaySide): Boolean =
         nextFile(side).hasContent() && prefs.getString(key(KEY_NEXT_DOC, side), null) != null
 
+    /**
+     * 先読み済みの画像を捨てる。
+     *
+     * 先読みは選んだ時点のフォルダから取られている。プロファイルが切り替わった後に
+     * これを昇格させると、切り替え前のフォルダの画像が出てしまう。
+     * プライベート用の画像が標準プロファイルで表示される事態を避けるため、必ず捨てる。
+     */
+    fun clearPrefetched(side: DisplaySide) {
+        nextFile(side).delete()
+        prefs.edit { remove(key(KEY_NEXT_DOC, side)) }
+    }
+
     /** [documentId] の画像を「次の1枚」としてコピーしておく。 */
-    fun cacheAsNext(side: DisplaySide, documentId: String): Boolean {
-        val treeUri = folderUri(side) ?: return false
+    fun cacheAsNext(side: DisplaySide, profile: WallpaperProfile, documentId: String): Boolean {
+        val treeUri = folderUri(side, profile) ?: return false
         val source = ImageFolderScanner.documentUri(treeUri, documentId) ?: return false
         if (!copyToLocal(source, nextFile(side))) return false
         prefs.edit { putString(key(KEY_NEXT_DOC, side), documentId) }
@@ -234,8 +261,8 @@ class WallpaperStore(context: Context) {
     }
 
     /** [documentId] の画像を、先読みを介さずその場で表示中にする。 */
-    fun cacheAsCurrent(side: DisplaySide, documentId: String): Boolean {
-        val treeUri = folderUri(side) ?: return false
+    fun cacheAsCurrent(side: DisplaySide, profile: WallpaperProfile, documentId: String): Boolean {
+        val treeUri = folderUri(side, profile) ?: return false
         val source = ImageFolderScanner.documentUri(treeUri, documentId) ?: return false
         if (!copyToLocal(source, currentFile(side))) return false
         markCurrent(side, documentId)
@@ -269,6 +296,18 @@ class WallpaperStore(context: Context) {
             if (value == null) remove(KEY_LAST_SIDE) else putString(KEY_LAST_SIDE, value.name)
         }
 
+    /**
+     * 最後に描画したプロファイル。[lastRenderedSide] と同じ理由で永続化する。
+     * これが現在のプロファイルと違えば、マナーモードが切り替わったということ。
+     */
+    var lastRenderedProfile: WallpaperProfile?
+        get() = prefs.getString(KEY_LAST_PROFILE, null)?.let { name ->
+            WallpaperProfile.entries.firstOrNull { it.name == name }
+        }
+        set(value) = prefs.edit {
+            if (value == null) remove(KEY_LAST_PROFILE) else putString(KEY_LAST_PROFILE, value.name)
+        }
+
     // --- 変更通知 -----------------------------------------------------------
 
     /**
@@ -296,16 +335,42 @@ class WallpaperStore(context: Context) {
 
     // --- 内部 ---------------------------------------------------------------
 
-    /** フォルダが変わったら、一覧もキャッシュ画像も作り直しになる。 */
-    private fun resetSideState(side: DisplaySide) {
+    /**
+     * フォルダが変わったら、その組の一覧は作り直しになる。
+     *
+     * 表示中／先読みの画像は面ごとに1枚ずつしか持たないので、どのプロファイル由来か
+     * までは区別せずに消す。次の描画で選び直される。
+     */
+    private fun resetSourceState(side: DisplaySide, profile: WallpaperProfile) {
+        listFile(side, profile).delete()
         currentFile(side).delete()
         nextFile(side).delete()
-        listFile(side).delete()
         prefs.edit {
             remove(key(KEY_CURRENT_DOC, side))
             remove(key(KEY_NEXT_DOC, side))
             remove(key(KEY_STAMP, side))
             remove(key(KEY_LAST_SWITCH, side))
+        }
+    }
+
+    /**
+     * プロファイル導入前のキー（`folder_<面>`）を標準プロファイルへ移す。
+     *
+     * 移行先を標準にするのは、プライベート用は明示的に設定してもらうべきだから。
+     * 何度呼んでも安全なように書いてある。
+     */
+    private fun migrateLegacyFolderKeys() {
+        DisplaySide.entries.forEach { side ->
+            val legacyKey = "${KEY_FOLDER}_${side.suffix()}"
+            val legacyValue = prefs.getString(legacyKey, null) ?: return@forEach
+            val targetKey = key(KEY_FOLDER, side, WallpaperProfile.STANDARD)
+
+            prefs.edit {
+                if (prefs.getString(targetKey, null) == null) putString(targetKey, legacyValue)
+                remove(legacyKey)
+            }
+            // 旧形式の一覧は新しい名前で作り直されるので消しておく。
+            File(cacheDir, "list_${side.suffix()}.txt").delete()
         }
     }
 
@@ -334,13 +399,21 @@ class WallpaperStore(context: Context) {
 
     private fun nextFile(side: DisplaySide) = File(cacheDir, "next_${side.suffix()}.img")
 
-    private fun listFile(side: DisplaySide) = File(cacheDir, "list_${side.suffix()}.txt")
+    private fun listFile(side: DisplaySide, profile: WallpaperProfile) =
+        File(cacheDir, "list_${side.suffix()}_${profile.suffix()}.txt")
 
     private fun File.hasContent(): Boolean = isFile && length() > 0L
 
     private fun DisplaySide.suffix(): String = name.lowercase()
 
+    private fun WallpaperProfile.suffix(): String = name.lowercase()
+
+    /** 面ごとの記帳（表示中の画像など）に使うキー。 */
     private fun key(prefix: String, side: DisplaySide): String = "${prefix}_${side.suffix()}"
+
+    /** 面とプロファイルの組ごとの設定（フォルダ）に使うキー。 */
+    private fun key(prefix: String, side: DisplaySide, profile: WallpaperProfile): String =
+        "${prefix}_${side.suffix()}_${profile.suffix()}"
 
     private fun String.parseUriOrNull(): Uri? = try {
         toUri()
@@ -365,5 +438,6 @@ class WallpaperStore(context: Context) {
         const val KEY_MEASURED_HEIGHT = "measured_height"
         const val KEY_MEASURED_AT = "measured_at"
         const val KEY_LAST_SIDE = "last_rendered_side"
+        const val KEY_LAST_PROFILE = "last_rendered_profile"
     }
 }
