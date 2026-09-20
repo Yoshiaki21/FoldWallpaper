@@ -25,18 +25,18 @@ object DeviceProfile {
     /**
      * 内側ディスプレイの想定アスペクト比。
      *
-     * 実機実測が済むまでの暫定値。参考: Pixel Fold 2208x1840 = 1.20 /
-     * Pixel 9 Pro Fold 2152x2076 = 1.04。
+     * Pixel 11 Pro Fold 実測 2076x2152 = 1.037。
+     * 参考: Pixel Fold 2208x1840 = 1.20 / Pixel 9 Pro Fold 2152x2076 = 1.04。
      */
-    val INNER_ASPECT_RATIO_RANGE: ClosedFloatingPointRange<Float> = 1.00f..1.45f
+    val INNER_ASPECT_RATIO_RANGE: ClosedFloatingPointRange<Float> = 1.00f..1.30f
 
     /**
      * 外側ディスプレイの想定アスペクト比。
      *
-     * 実機実測が済むまでの暫定値。参考: Pixel Fold 2092x1080 = 1.94 /
-     * Pixel 9 Pro Fold 2424x1080 = 2.24。
+     * Pixel 11 Pro Fold 実測 1080x2342 = 2.169。
+     * 参考: Pixel Fold 2092x1080 = 1.94 / Pixel 9 Pro Fold 2424x1080 = 2.24。
      */
-    val OUTER_ASPECT_RATIO_RANGE: ClosedFloatingPointRange<Float> = 1.70f..2.60f
+    val OUTER_ASPECT_RATIO_RANGE: ClosedFloatingPointRange<Float> = 1.90f..2.50f
 
     /**
      * 上のどちらのレンジにも入らなかったときに使う分界点。

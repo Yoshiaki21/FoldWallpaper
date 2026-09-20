@@ -11,7 +11,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -29,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -55,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.yoshiaki21.FoldWallpaper.data.ImageFolderScanner
 import com.yoshiaki21.FoldWallpaper.data.WallpaperStore
 import com.yoshiaki21.FoldWallpaper.ui.theme.FoldWallpaperTheme
 import com.yoshiaki21.FoldWallpaper.wallpaper.FoldWallpaperService
@@ -64,7 +66,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
-/** 内側／外側それぞれの画像を選ぶ設定画面。ライブ壁紙の settingsActivity も兼ねる。 */
+/** 内側／外側それぞれのフォルダを選ぶ設定画面。ライブ壁紙の settingsActivity も兼ねる。 */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,13 +87,22 @@ class MainActivity : ComponentActivity() {
 /** サムネイル読み込み時の目標解像度。実描画には使わないので小さめで足りる。 */
 private const val THUMBNAIL_TARGET_PX = 480
 
+/** 設定画面が表示する、片面ぶんの状態。 */
+private data class SideUiState(
+    val loading: Boolean = true,
+    val folderName: String? = null,
+    val hasFolder: Boolean = false,
+    val hasAccess: Boolean = true,
+    val imageCount: Int = 0,
+    val thumbnail: Bitmap? = null,
+)
+
 @Composable
 private fun SettingsScreen() {
     val store = WallpaperStore(LocalContext.current)
 
-    // 画像の差し替えや画面復帰のたびに増やし、ファイル由来の表示を読み直させる。
+    // フォルダの差し替えや画面復帰のたびに増やし、フォルダの中身を読み直させる。
     var revision by remember { mutableIntStateOf(0) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     OnResume { revision++ }
 
@@ -113,60 +124,54 @@ private fun SettingsScreen() {
         )
 
         DisplaySide.entries.forEach { side ->
-            ImageSlotCard(
+            FolderSlotCard(
                 side = side,
                 store = store,
                 revision = revision,
-                onImageChanged = { revision++ },
-                onError = { errorMessage = it },
+                onFolderChanged = { revision++ },
             )
         }
+
+        Text(
+            text = stringResource(R.string.folder_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        IntervalCard(store = store)
 
         SetLiveWallpaperButton(revision = revision, onReturned = { revision++ })
 
         DiagnosticsCard()
-
-        errorMessage?.let {
-            Text(
-                text = it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
     }
 }
 
 @Composable
-private fun ImageSlotCard(
+private fun FolderSlotCard(
     side: DisplaySide,
     store: WallpaperStore,
     revision: Int,
-    onImageChanged: () -> Unit,
-    onError: (String) -> Unit,
+    onFolderChanged: () -> Unit,
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
-    var isSaving by remember { mutableStateOf(false) }
-
-    val saveFailedMessage = stringResource(R.string.state_save_failed)
+    var state by remember { mutableStateOf(SideUiState()) }
 
     LaunchedEffect(side, revision) {
-        thumbnail = withContext(Dispatchers.IO) {
-            store.imageFileFor(side)?.let {
-                WallpaperRenderer.decodeScaled(it, THUMBNAIL_TARGET_PX, THUMBNAIL_TARGET_PX)
-            }
-        }
+        state = state.copy(loading = true)
+        state = withContext(Dispatchers.IO) { loadSideState(context, store, side) }
     }
 
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia(),
-    ) { uri ->
-        if (uri != null) {
-            isSaving = true
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { treeUri ->
+        if (treeUri != null) {
+            state = state.copy(loading = true)
             scope.launch {
-                val saved = withContext(Dispatchers.IO) { store.saveImage(side, uri) }
-                isSaving = false
-                if (saved) onImageChanged() else onError(saveFailedMessage)
+                withContext(Dispatchers.IO) {
+                    if (store.setFolder(side, treeUri)) store.rescanFolder(side)
+                }
+                onFolderChanged()
             }
         }
     }
@@ -189,10 +194,10 @@ private fun ImageSlotCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
-                val bitmap = thumbnail
-                if (bitmap != null) {
+                val thumbnail = state.thumbnail
+                if (thumbnail != null) {
                     Image(
-                        bitmap = bitmap.asImageBitmap(),
+                        bitmap = thumbnail.asImageBitmap(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         // Engine 側と同じ中央クロップで見せる。
@@ -201,7 +206,7 @@ private fun ImageSlotCard(
                 } else {
                     Text(
                         text = stringResource(
-                            if (isSaving) R.string.state_saving else R.string.state_no_image,
+                            if (state.loading) R.string.state_scanning else R.string.state_no_folder,
                         ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -209,36 +214,112 @@ private fun ImageSlotCard(
                 }
             }
 
+            FolderStatus(state)
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
-                    onClick = {
-                        picker.launch(
-                            PickVisualMediaRequest(
-                                ActivityResultContracts.PickVisualMedia.ImageOnly,
-                            ),
-                        )
-                    },
-                    enabled = !isSaving,
+                    onClick = { folderPicker.launch(store.folderUri(side)) },
+                    enabled = !state.loading,
                 ) {
                     Text(
                         text = stringResource(
-                            if (thumbnail == null) R.string.action_pick_image
-                            else R.string.action_change_image,
+                            if (state.hasFolder) R.string.action_change_folder
+                            else R.string.action_pick_folder,
                         ),
                     )
                 }
-                if (thumbnail != null) {
+                if (state.hasFolder) {
                     TextButton(
                         onClick = {
-                            store.clearImage(side)
-                            onImageChanged()
+                            scope.launch {
+                                withContext(Dispatchers.IO) { store.clearFolder(side) }
+                                onFolderChanged()
+                            }
                         },
-                        enabled = !isSaving,
+                        enabled = !state.loading,
                     ) {
-                        Text(text = stringResource(R.string.action_clear_image))
+                        Text(text = stringResource(R.string.action_clear_folder))
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FolderStatus(state: SideUiState) {
+    when {
+        state.loading -> Unit
+
+        !state.hasFolder -> Text(
+            text = stringResource(R.string.state_no_folder),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        !state.hasAccess -> Text(
+            text = stringResource(R.string.state_folder_denied),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+
+        state.imageCount == 0 -> Text(
+            text = stringResource(R.string.state_folder_empty),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+
+        else -> Column {
+            state.folderName?.let {
+                Text(text = it, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(
+                text = stringResource(R.string.state_image_count, state.imageCount),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun IntervalCard(store: WallpaperStore) {
+    var selected by remember { mutableStateOf(store.switchInterval) }
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.interval_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+
+            Box {
+                OutlinedButton(onClick = { expanded = true }) {
+                    Text(text = stringResource(selected.labelRes()))
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    SwitchInterval.entries.forEach { interval ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(interval.labelRes())) },
+                            onClick = {
+                                store.switchInterval = interval
+                                selected = interval
+                                expanded = false
+                            },
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = stringResource(R.string.interval_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -281,7 +362,7 @@ private fun SetLiveWallpaperButton(revision: Int, onReturned: () -> Unit) {
 
 /**
  * 実機のアスペクト比を確認するための診断表示。
- * [DeviceProfile] の暫定値を実測値に置き換えるときに使う。
+ * [DeviceProfile] の値を実測値に合わせるときに使う。
  */
 @Composable
 private fun DiagnosticsCard() {
@@ -354,6 +435,34 @@ private fun OnResume(onResume: () -> Unit) {
     }
 }
 
+/** 設定画面を開いたときだけフォルダを読み直す。描画経路では再スキャンしない。 */
+private fun loadSideState(
+    context: Context,
+    store: WallpaperStore,
+    side: DisplaySide,
+): SideUiState {
+    val folderUri = store.folderUri(side)
+        ?: return SideUiState(loading = false, hasFolder = false)
+
+    if (!store.hasFolderAccess(side)) {
+        return SideUiState(loading = false, hasFolder = true, hasAccess = false)
+    }
+
+    val imageCount = store.rescanFolder(side)
+    val thumbnail = store.currentImageFile(side)?.let {
+        WallpaperRenderer.decodeScaled(it, THUMBNAIL_TARGET_PX, THUMBNAIL_TARGET_PX)
+    }
+
+    return SideUiState(
+        loading = false,
+        folderName = ImageFolderScanner.folderDisplayName(context, folderUri),
+        hasFolder = true,
+        hasAccess = true,
+        imageCount = imageCount,
+        thumbnail = thumbnail,
+    )
+}
+
 private tailrec fun Context.findLifecycleOwner(): LifecycleOwner? = when (this) {
     is LifecycleOwner -> this
     is ContextWrapper -> baseContext.findLifecycleOwner()
@@ -365,8 +474,15 @@ private fun DisplaySide.labelRes(): Int = when (this) {
     DisplaySide.OUTER -> R.string.side_outer
 }
 
+private fun SwitchInterval.labelRes(): Int = when (this) {
+    SwitchInterval.NONE -> R.string.interval_none
+    SwitchInterval.MINUTES_15 -> R.string.interval_15m
+    SwitchInterval.HOUR_1 -> R.string.interval_1h
+    SwitchInterval.HOURS_6 -> R.string.interval_6h
+}
+
 /** プレビュー枠の形。実機の見え方に近づけるための表示上の値。 */
 private fun DisplaySide.previewAspectRatio(): Float = when (this) {
-    DisplaySide.INNER -> 1f / 1.1f
-    DisplaySide.OUTER -> 1f / 2.2f
+    DisplaySide.INNER -> 1f / 1.04f
+    DisplaySide.OUTER -> 1f / 2.17f
 }

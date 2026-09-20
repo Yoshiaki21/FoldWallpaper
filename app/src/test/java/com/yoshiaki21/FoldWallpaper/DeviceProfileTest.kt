@@ -24,6 +24,16 @@ class DeviceProfileTest {
     }
 
     @Test
+    fun `measured Pixel 11 Pro Fold sizes are classified correctly`() {
+        // 実機実測値。内側 1.037 / 外側 2.169
+        assertEquals(DisplaySide.INNER, DeviceProfile.classify(2076, 2152))
+        assertEquals(DisplaySide.OUTER, DeviceProfile.classify(1080, 2342))
+
+        assertTrue(DeviceProfile.isWithinKnownRange(2076, 2152))
+        assertTrue(DeviceProfile.isWithinKnownRange(1080, 2342))
+    }
+
+    @Test
     fun `near square displays are classified as inner`() {
         // Pixel Fold 2208x1840 = 1.20 / Pixel 9 Pro Fold 2152x2076 = 1.04
         assertEquals(DisplaySide.INNER, DeviceProfile.classify(1840, 2208))
@@ -71,9 +81,4 @@ class DeviceProfileTest {
         )
     }
 
-    @Test
-    fun `measured sizes inside the known ranges are reported as known`() {
-        assertTrue(DeviceProfile.isWithinKnownRange(2076, 2152))
-        assertTrue(DeviceProfile.isWithinKnownRange(1080, 2424))
-    }
 }

@@ -3,20 +3,31 @@
     <string name="wallpaper_description">開閉に応じて内側／外側で別々の画像を表示します</string>
 
     <string name="settings_title">FoldWallpaper</string>
-    <string name="settings_subtitle">内側と外側のディスプレイに、それぞれ別の画像を設定します。</string>
+    <string name="settings_subtitle">内側と外側のディスプレイに、それぞれ別の画像フォルダを設定します。フォルダ内の画像から1枚がランダムに表示されます。</string>
 
     <string name="side_inner">内側ディスプレイ（開いた状態）</string>
     <string name="side_outer">外側ディスプレイ（閉じた状態）</string>
 
-    <string name="action_pick_image">画像を選択</string>
-    <string name="action_change_image">画像を変更</string>
-    <string name="action_clear_image">クリア</string>
+    <string name="action_pick_folder">フォルダを選択</string>
+    <string name="action_change_folder">フォルダを変更</string>
+    <string name="action_clear_folder">クリア</string>
     <string name="action_set_live_wallpaper">ライブ壁紙に設定</string>
 
-    <string name="state_no_image">未設定</string>
-    <string name="state_saving">保存中…</string>
-    <string name="state_save_failed">画像の保存に失敗しました</string>
+    <string name="state_no_folder">フォルダ未設定</string>
+    <string name="state_scanning">読み込み中…</string>
+    <string name="state_image_count">%1$d 枚の画像</string>
+    <string name="state_folder_empty">このフォルダに画像がありません</string>
+    <string name="state_folder_denied">フォルダへのアクセス権がありません。選び直してください。</string>
     <string name="state_already_active">このライブ壁紙は現在有効です</string>
+
+    <string name="interval_title">時間経過での切替</string>
+    <string name="interval_hint">開閉したときは必ず切り替わります。この設定は、開閉しないまま壁紙が見えたときにどれだけ経っていれば切り替えるかを決めます。</string>
+    <string name="interval_none">切り替えない（開閉時のみ）</string>
+    <string name="interval_15m">15分</string>
+    <string name="interval_1h">1時間</string>
+    <string name="interval_6h">6時間</string>
+
+    <string name="folder_hint">Download 直下や Android/data は Android の制限で選択できません。DCIM や Pictures の中のフォルダを指定してください。</string>
 
     <string name="diagnostics_title">この画面の実測値</string>
     <string name="diagnostics_hint">端末を開閉してこの画面の値を確認し、DeviceProfile.kt のレンジを実測値に合わせてください。</string>
