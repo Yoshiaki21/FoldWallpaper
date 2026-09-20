@@ -31,6 +31,24 @@
 
     <string name="dim_value">暗さ: %1$d%%</string>
 
+    <string name="profile_title">プライベート判定</string>
+    <string name="profile_ringer_mode">マナーモード: %1$s</string>
+    <string name="profile_selected">適用プロファイル: %1$s</string>
+    <string name="profile_hint">マナーモードを切り替えると、この表示がその場で変わります。実際の壁紙の出し分けは未実装です。</string>
+    <string name="profile_private">プライベート</string>
+    <string name="profile_standard">標準</string>
+
+    <string name="ringer_normal">着信音あり</string>
+    <string name="ringer_vibrate">バイブ</string>
+    <string name="ringer_silent">サイレント</string>
+    <string name="ringer_unknown">不明</string>
+
+    <string name="measured_title">壁紙の描画領域</string>
+    <string name="measured_size">%1$d × %2$d px（比 %3$s）</string>
+    <string name="measured_at">測定: %1$s</string>
+    <string name="measured_missing_inner">未測定 — 端末を開いてホーム画面を表示してください</string>
+    <string name="measured_missing_outer">未測定 — 端末を閉じてホーム画面を表示してください</string>
+
     <string name="interval_title">時間経過での切替</string>
     <string name="interval_hint">開閉したときは必ず切り替わります。この設定は、開閉しないまま壁紙が見えたときにどれだけ経っていれば切り替えるかを決めます。</string>
     <string name="interval_none">切り替えない（開閉時のみ）</string>

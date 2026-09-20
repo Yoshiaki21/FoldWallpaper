@@ -1,12 +1,16 @@
 package com.yoshiaki21.FoldWallpaper
 
 import android.app.WallpaperManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
+import android.media.AudioManager
 import android.os.Bundle
+import android.text.format.DateUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -558,6 +562,8 @@ private fun SetLiveWallpaperButton(revision: Int, onReturned: () -> Unit) {
 /** 設定とは別に開く情報画面。実機の値を確認するために使う。 */
 @Composable
 private fun InfoScreen(onBack: () -> Unit) {
+    val store = WallpaperStore(LocalContext.current)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -580,8 +586,148 @@ private fun InfoScreen(onBack: () -> Unit) {
             }
         }
 
+        ProfileCard()
+
+        MeasuredSizeCard(store = store)
+
         DiagnosticsCard()
     }
+}
+
+/**
+ * プライベート判定の状態。マナーモードを切り替えながら動作を確認するためのもの。
+ * 画面を開いたままでも追従するよう、マナーモードの変更を購読する。
+ */
+@Composable
+private fun ProfileCard() {
+    val ringerMode = rememberRingerMode()
+    val profile = ProfileSelection.fromRingerMode(ringerMode)
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.profile_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = stringResource(
+                    R.string.profile_ringer_mode,
+                    stringResource(ringerModeLabelRes(ringerMode)),
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = stringResource(
+                    R.string.profile_selected,
+                    stringResource(profile.labelRes()),
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = stringResource(R.string.profile_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 壁紙が実際に描かれた領域のサイズ。壁紙素材を作るときの基準になる。
+ *
+ * 両面の値を同時に取得するAPIが無いため、Engine が描画時に記録した実測値を表示する。
+ * 端末を一度開いて一度閉じれば両方揃う。
+ */
+@Composable
+private fun MeasuredSizeCard(store: WallpaperStore) {
+    val context = LocalContext.current
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.measured_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+
+            DisplaySide.entries.forEach { side ->
+                val measured = store.measuredSize(side)
+                Column {
+                    Text(
+                        text = stringResource(side.labelRes()),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (measured == null) {
+                        Text(
+                            text = stringResource(side.measuredMissingRes()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(
+                                R.string.measured_size,
+                                measured.width,
+                                measured.height,
+                                String.format(
+                                    Locale.US,
+                                    "%.3f",
+                                    DeviceProfile.aspectRatioOf(measured.width, measured.height),
+                                ),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.measured_at,
+                                DateUtils.formatDateTime(
+                                    context,
+                                    measured.recordedAt,
+                                    DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME,
+                                ),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 現在のマナーモードを返し、変更されたら更新する。
+ *
+ * `RINGER_MODE_CHANGED_ACTION` はシステムからのみ送られる protected intent なので、
+ * 受信側に権限は要らない。他アプリからの送信を受ける必要はないため NOT_EXPORTED で登録する。
+ */
+@Composable
+private fun rememberRingerMode(): Int {
+    val context = LocalContext.current
+    var ringerMode by remember { mutableIntStateOf(ProfileSelection.currentRingerMode(context)) }
+
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receivedContext: Context?, intent: Intent?) {
+                ringerMode = ProfileSelection.currentRingerMode(context)
+            }
+        }
+        context.registerReceiver(
+            receiver,
+            IntentFilter(AudioManager.RINGER_MODE_CHANGED_ACTION),
+            Context.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+
+    return ringerMode
 }
 
 /**
@@ -702,6 +848,24 @@ private fun DisplaySide.labelRes(): Int = when (this) {
 private fun DisplaySide.shortLabelRes(): Int = when (this) {
     DisplaySide.INNER -> R.string.side_inner_short
     DisplaySide.OUTER -> R.string.side_outer_short
+}
+
+/** まだ実測できていないときに、どう操作すれば測れるかを伝える文言。 */
+private fun DisplaySide.measuredMissingRes(): Int = when (this) {
+    DisplaySide.INNER -> R.string.measured_missing_inner
+    DisplaySide.OUTER -> R.string.measured_missing_outer
+}
+
+private fun WallpaperProfile.labelRes(): Int = when (this) {
+    WallpaperProfile.PRIVATE -> R.string.profile_private
+    WallpaperProfile.STANDARD -> R.string.profile_standard
+}
+
+private fun ringerModeLabelRes(ringerMode: Int): Int = when (ringerMode) {
+    AudioManager.RINGER_MODE_NORMAL -> R.string.ringer_normal
+    AudioManager.RINGER_MODE_VIBRATE -> R.string.ringer_vibrate
+    AudioManager.RINGER_MODE_SILENT -> R.string.ringer_silent
+    else -> R.string.ringer_unknown
 }
 
 private fun SwitchInterval.labelRes(): Int = when (this) {

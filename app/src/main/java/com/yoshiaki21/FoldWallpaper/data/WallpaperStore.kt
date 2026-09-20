@@ -13,6 +13,9 @@ import com.yoshiaki21.FoldWallpaper.WallpaperDimming
 import java.io.File
 import java.io.IOException
 
+/** 壁紙が実際に描画された領域のサイズ。壁紙素材を作るときの基準になる。 */
+data class MeasuredSize(val width: Int, val height: Int, val recordedAt: Long)
+
 /**
  * 設定と、画像のローカルキャッシュの保存先。
  *
@@ -111,6 +114,39 @@ class WallpaperStore(context: Context) {
 
     fun setDimPercent(side: DisplaySide, percent: Int) {
         prefs.edit { putInt(key(KEY_DIM, side), WallpaperDimming.clamp(percent)) }
+    }
+
+    // --- 壁紙の描画領域の実測値 ---------------------------------------------
+
+    /**
+     * [side] で壁紙が実際に描かれた領域のサイズ。一度も描かれていなければ null。
+     *
+     * 両面の解像度を同時に取得するAPIは存在せず（`DisplayManager.getDisplays()` は
+     * 今有効な論理ディスプレイしか返さない）、設定画面のウィンドウサイズは壁紙サーフェスと
+     * 一致しない。壁紙素材を作るための正確な値は Engine が実測するしかないため、
+     * 描画時に記録して情報画面で参照する。
+     */
+    fun measuredSize(side: DisplaySide): MeasuredSize? {
+        val width = prefs.getInt(key(KEY_MEASURED_WIDTH, side), 0)
+        val height = prefs.getInt(key(KEY_MEASURED_HEIGHT, side), 0)
+        if (width <= 0 || height <= 0) return null
+        return MeasuredSize(
+            width = width,
+            height = height,
+            recordedAt = prefs.getLong(key(KEY_MEASURED_AT, side), 0L),
+        )
+    }
+
+    /** 描画のたびに呼ばれるので、サイズが変わったときだけ書き込む。 */
+    fun recordMeasuredSize(side: DisplaySide, width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        val known = measuredSize(side)
+        if (known != null && known.width == width && known.height == height) return
+        prefs.edit {
+            putInt(key(KEY_MEASURED_WIDTH, side), width)
+            putInt(key(KEY_MEASURED_HEIGHT, side), height)
+            putLong(key(KEY_MEASURED_AT, side), System.currentTimeMillis())
+        }
     }
 
     // --- ファイル一覧 -------------------------------------------------------
@@ -325,6 +361,9 @@ class WallpaperStore(context: Context) {
         const val KEY_LAST_SWITCH = "last_switch"
         const val KEY_INTERVAL = "switch_interval_minutes"
         const val KEY_DIM = "dim"
+        const val KEY_MEASURED_WIDTH = "measured_width"
+        const val KEY_MEASURED_HEIGHT = "measured_height"
+        const val KEY_MEASURED_AT = "measured_at"
         const val KEY_LAST_SIDE = "last_rendered_side"
     }
 }

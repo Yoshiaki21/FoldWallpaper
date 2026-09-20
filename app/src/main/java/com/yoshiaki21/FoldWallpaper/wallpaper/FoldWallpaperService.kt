@@ -108,6 +108,10 @@ class FoldWallpaperService : WallpaperService() {
         private fun update() {
             val side = currentSide() ?: return
             scope.launch {
+                // 壁紙素材を作るための実測値。この値を知っているのは Engine だけなので、
+                // 描画のついでに記録して情報画面から参照できるようにする。
+                store.recordMeasuredSize(side, surfaceWidth, surfaceHeight)
+
                 if (shouldAdvance(side)) rotator.advance(side)
                 store.lastRenderedSide = side
                 drawFrame(side)
